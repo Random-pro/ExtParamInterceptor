@@ -1,0 +1,21 @@
+server:
+  port: 8000
+spring:
+  application:
+    name: mybatis-ext-param-interceptor-test
+  datasource:
+    url: jdbc:mysql://localhost:3300/live
+    driver-class-name: com.mysql.cj.jdbc.Driver
+    username: root
+    password: root
+
+mybatis:
+  # 搜索指定包别名
+  typeAliasesPackage: com.live.**.domain
+  # 配置mapper的扫描，找到所有的mapper.xml映射文件
+  mapperLocations: classpath*:mapper/**/*Mapper.xml
+logging:
+  level:
+    com.live: debug
+    org.springframework: debug
+    org.mybatis: debug

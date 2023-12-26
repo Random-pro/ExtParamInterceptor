@@ -4,8 +4,17 @@
 ---
 
 ## 使用方法：
-1. 将仓库下的MyBatisParamExecutorInterceptorV2.java放置于能被SpringBoot扫描到的工程目录下
-2. 修改文件中的如下配置
+1. 将仓库下的MyBatisParamExecutorInterceptorV2.java放置于能被SpringBoot扫描到的工程目录下（如果自身项目配置了Mybatis的SpringBoot Starter，则无需做额外处理，否则需要手动将该插件加入到Mbatis配置文件）
+2. 添加插件依赖（如果项目本身使用了MybatisPlus，由于其本身依赖中包含了JSqlParser则通常无需再添加）：
+~~~xml
+<dependency>
+  <groupId>com.github.jsqlparser</groupId>
+  <artifactId>jsqlparser</artifactId>
+  <version>4.6</version>
+  <scope>compile</scope>
+</dependency>
+~~~
+3. 修改文件中的如下配置
 ~~~java
     /**
      * 如下为映射字段与实体名的相关配置 如有不同之处可自行修改：
@@ -27,6 +36,8 @@
     }
 ~~~
 > 之后使用Mybatis进行的所有增删改查操作都会被自动添加创建人、创建时间、修改人、修改时间
+
+> 注意：该插件适配JDK17、SpringBoot3.0+版本，较旧的版本可能存在不兼容的情况。仓库目录下Demo为插件使用的示例工程，可作为参考
 
 ## 工作方式
 1. Insert操作：自动为Insert语句添加创建人、创建时间字段并赋值
@@ -65,7 +76,7 @@
     // Mapper接口
     @Mapper
     public interface TestMapper {
-      @Select("SELECT * FROM child")
+      @Select("SELECT id as childId, name as childName, parent_id as parentId, path FROM child")
       List<Child> getChildList();
     }
 

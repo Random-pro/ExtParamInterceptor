@@ -1,7 +1,5 @@
 package com.live.interceptor;
 
-import com.google.common.base.CaseFormat;
-import lombok.extern.slf4j.Slf4j;
 import net.sf.jsqlparser.JSQLParserException;
 import net.sf.jsqlparser.expression.Alias;
 import net.sf.jsqlparser.expression.RowConstructor;
@@ -27,6 +25,8 @@ import org.apache.ibatis.plugin.Signature;
 import org.apache.ibatis.session.Configuration;
 import org.apache.ibatis.session.ResultHandler;
 import org.apache.ibatis.session.RowBounds;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 import org.springframework.util.ReflectionUtils;
 import org.springframework.util.StringUtils;
@@ -40,7 +40,6 @@ import java.util.*;
  * @author sun
  */
 @Component
-@Slf4j
 @Intercepts({@Signature(
         type = Executor.class,
         method = "update",
@@ -62,6 +61,7 @@ public record MyBatisParamExecutorInterceptorV2() implements Interceptor {
      * XXX_PROPERTY - 为实体类对应字段   XXX_COLUMN - 为数据库中对应列名
      * 目前仅支持创建人 更新人 创建时间 更新时间四个字段的添加 后续会变为动态可配置的方式
      */
+    private static final Logger log = LoggerFactory.getLogger(MyBatisParamExecutorInterceptorV2.class);
     private static final String CREATE_BY_PROPERTY = "createBy";
     private static final String CREATE_BY_COLUMN = "create_by";
     private static final String UPDATE_BY_PROPERTY = "updateBy";
@@ -71,7 +71,9 @@ public record MyBatisParamExecutorInterceptorV2() implements Interceptor {
     private static final String UPDATE_TIME_PROPERTY = "updateTime";
     private static final String UPDATE_TIME_COLUMN = "update_time";
 
-    // 这里需自行实现获取当前用户的逻辑
+    /**
+     * 这里需自行实现获取当前用户的逻辑
+     */
     private static String getCurrentUser() {
         return "RANDOM-PRO";
     }
@@ -88,7 +90,6 @@ public record MyBatisParamExecutorInterceptorV2() implements Interceptor {
         Object[] args = invocation.getArgs();
 
         MappedStatement mappedStatement = (MappedStatement) args[0];
-        Map<String, Object> paramMap = (Map<String, Object>) args[1];
 
         // 初次进入拦截器 构建Configuration
         if(modifiedConfiguration == null) {
@@ -119,13 +120,9 @@ public record MyBatisParamExecutorInterceptorV2() implements Interceptor {
     }
 
     public MappedStatement buildMappedStatement(Configuration newModifiedConfiguration, MappedStatement mappedStatement) {
-        // Configuration需要新创建 其中包含了ResultMaps需被修改
         SqlSource modifiedSqlSource = new ModifiedSqlSourceV2(mappedStatement, newModifiedConfiguration);
 
-        // 生成修改后的ResultMap 这个过程中会修改Configuration.ResultMap中必要的嵌套结果映射对象
-        // List<ResultMap> modifiedResultMaps = modifyResultMap(mappedStatement);
         List<ResultMap> modifiedResultMaps = mappedStatement.getResultMaps().stream().map((resultMap) -> {
-            // TODO 需找到已有resultMapping与表之间的对应关系
             List<ResultMapping> resultMappingList = resultMap.getResultMappings();
             // 为每个resultMap中的resultMappingList添加公共参数映射
             List<ResultMapping> modifiedResultMappingList = addResultMappingProperty(newModifiedConfiguration, resultMappingList, resultMap.getType());
@@ -154,10 +151,8 @@ public record MyBatisParamExecutorInterceptorV2() implements Interceptor {
     }
 
     private Configuration createConfiguration(Configuration sourceConfig) {
-        // 这里new 继承后的带有deleteResultMap的对象
         Configuration targetConfig = new Configuration();
 
-        // 设置新 Configuration 对象的属性和参数
         targetConfig.setEnvironment(sourceConfig.getEnvironment());
         targetConfig.setAutoMappingUnknownColumnBehavior(sourceConfig.getAutoMappingUnknownColumnBehavior());
         targetConfig.setCacheEnabled(sourceConfig.isCacheEnabled());
@@ -204,20 +199,14 @@ public record MyBatisParamExecutorInterceptorV2() implements Interceptor {
             }
         });
 
-        // targetConfig.addLoadedResource();
-//        sourceConfig.getMapperRegistry().getMappers().forEach((mapper -> {
-//            targetConfig.addMapper(mapper);
-//        }));
-
         // 预处理 添加映射
         sourceConfig.getResultMaps().forEach((resultMap) -> {
-            // 替换configuration中的ResultMap 替换为添加公共参数映射后的ResultMap
             List<ResultMapping> resultMappingList = resultMap.getResultMappings();
             // 为每个resultMap中的resultMappingList添加公共参数映射(resultMapList中已包含嵌套对象 故这里无需递归修改)
             List<ResultMapping> modifiedResultMappingList = addResultMappingProperty(targetConfig, resultMappingList, resultMap.getType());
 
             ResultMap newModifiedResultMap = new ResultMap.Builder(targetConfig, resultMap.getId(), resultMap.getType(), modifiedResultMappingList, resultMap.getAutoMapping()).build();
-            // 长的resultMapName 如com.live.mapper.TestMapper.findByState-String
+            // 长的resultMapName 如com.live.mapper.TestMapper.findByState-String 底层add到map内之前会将短名称做key也加入至map
             if(!targetConfig.hasResultMap(resultMap.getId())) {
                 targetConfig.addResultMap(newModifiedResultMap);
             }
@@ -255,14 +244,14 @@ public record MyBatisParamExecutorInterceptorV2() implements Interceptor {
         List<ResultMapping> modifiableResultMappingList = new ArrayList<>(resultMappingList);
 
         String []checkList = {CREATE_BY_PROPERTY, CREATE_TIME_PROPERTY, UPDATE_BY_PROPERTY, UPDATE_TIME_PROPERTY};
-        boolean hasAnyTargetProperty = Arrays.stream(checkList).anyMatch((property) -> ReflectionUtils.findField(mappedType, CREATE_BY_PROPERTY) != null);
+        boolean hasAnyTargetProperty = Arrays.stream(checkList).anyMatch((property) -> ReflectionUtils.findField(mappedType, property) != null);
 
         // 用于防止映射目标为基本类型却被添加映射 导致列名规则 表名_列名 无法与映射的列名的添加规则 映射类型名_列名 相照应
         // 从而导致映射类型为基本类型时会生成出类似与string_column1的映射名 而产生找不到映射列名与实际结果列相照应的列名导致mybatis产生错误
         // 规则: 仅映射类型中包含如上四个字段其一时才会添加映射
         if(hasAnyTargetProperty) {
             // 支持类型使用驼峰命名
-            String currentTable = CaseFormat.LOWER_CAMEL.to(CaseFormat.LOWER_UNDERSCORE, mappedType.getSimpleName());
+            String currentTable = upperCamelToLowerUnderscore(mappedType.getSimpleName());
 
             // 映射方式 表名_公共字段名 在实体中 表名与实体名相同 则可完成映射
             modifiableResultMappingList.add(new ResultMapping.Builder(configuration, CREATE_BY_PROPERTY, currentTable + "_" + CREATE_BY_COLUMN, String.class).build());
@@ -272,6 +261,22 @@ public record MyBatisParamExecutorInterceptorV2() implements Interceptor {
         }
 
         return modifiableResultMappingList;
+    }
+
+    private static String upperCamelToLowerUnderscore(String source) {
+        StringBuilder convertBuffer = new StringBuilder();
+        for(int i = 0;i < source.length();i++) {
+            char currentChar = source.charAt(i);
+            if(Character.isUpperCase(currentChar)) {
+                if(i != 0) {
+                    convertBuffer.append('_');
+                }
+                convertBuffer.append(Character.toLowerCase(currentChar));
+            } else {
+                convertBuffer.append(currentChar);
+            }
+        }
+        return convertBuffer.toString();
     }
 
     static class ModifiedSqlSourceV2 implements SqlSource {
@@ -324,9 +329,9 @@ public record MyBatisParamExecutorInterceptorV2() implements Interceptor {
                             // 多行插入 行构造器解析
                             if (expressionList.getExpressions().get(0) instanceof RowConstructor) {
                                 expressionList.getExpressions().forEach((expression -> {
-                                    if (expression instanceof RowConstructor rowConstructor1) {
-                                        rowConstructor1.getExprList().getExpressions().add(new StringValue(getCurrentUser()));
-                                        rowConstructor1.getExprList().getExpressions().add(new TimestampValue().withValue(currentTimeStamp));
+                                    if (expression instanceof RowConstructor rowConstructor) {
+                                        rowConstructor.getExprList().getExpressions().add(new StringValue(getCurrentUser()));
+                                        rowConstructor.getExprList().getExpressions().add(new TimestampValue().withValue(currentTimeStamp));
                                     }
                                 }));
                             } else {
